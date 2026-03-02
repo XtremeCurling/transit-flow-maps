@@ -34,3 +34,4 @@ pipeline/src/transit_flow_maps/config/local.yaml
 
 # Build outputs
 web/dist/
+web/public/data/processed/web/*.geojson

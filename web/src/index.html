@@ -7,10 +7,12 @@
     <style>
       :root {
         color-scheme: light;
-        --bg: #f4f5f0;
-        --ink: #10131a;
+        --bg: #f0f3ec;
+        --ink: #0f151d;
         --panel: rgba(255, 255, 255, 0.94);
-        --border: rgba(16, 19, 26, 0.2);
+        --border: rgba(24, 37, 49, 0.18);
+        --accent: #e74c3c;
+        --muted: #4f5f6f;
       }
 
       html,
@@ -19,7 +21,10 @@
         margin: 0;
         height: 100%;
         width: 100%;
-        background: radial-gradient(circle at 15% 20%, #fff7df, var(--bg));
+        background:
+          radial-gradient(circle at 15% 15%, #fff7d3 0, transparent 35%),
+          radial-gradient(circle at 85% 90%, #d8efe0 0, transparent 45%),
+          linear-gradient(180deg, #fbfcf8 0, var(--bg) 65%);
       }
 
       #map {
@@ -34,23 +39,87 @@
         z-index: 10;
         background: var(--panel);
         border: 1px solid var(--border);
-        border-radius: 10px;
-        padding: 10px;
+        border-radius: 12px;
+        padding: 12px;
+        width: min(300px, calc(100vw - 32px));
+        box-sizing: border-box;
+        box-shadow: 0 12px 40px rgba(17, 27, 35, 0.12);
         font-family: "Avenir Next", Avenir, "Segoe UI", sans-serif;
         font-size: 13px;
         display: grid;
-        gap: 8px;
+        gap: 10px;
+      }
+
+      .title {
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: var(--muted);
       }
 
       .row {
         display: flex;
         gap: 8px;
         align-items: center;
+        flex-wrap: wrap;
       }
 
-      .legend {
+      .row select {
+        min-width: 140px;
+      }
+
+      .row.hidden {
+        display: none;
+      }
+
+      .controls label {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+      }
+
+      .legend-title {
+        font-size: 11px;
+        color: var(--muted);
+      }
+
+      .legend-lines {
+        display: grid;
+        gap: 6px;
+      }
+
+      .legend-item {
+        display: grid;
+        grid-template-columns: 48px auto;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .legend-swatch {
+        display: block;
+        width: 48px;
+        border-radius: 999px;
+        background: linear-gradient(90deg, #e74c3c, #f29f3f);
+      }
+
+      .legend-label {
         font-size: 12px;
-        line-height: 1.3;
+      }
+
+      .legend-note {
+        font-size: 11px;
+        color: var(--muted);
+      }
+
+      @media (max-width: 640px) {
+        .controls {
+          top: auto;
+          bottom: 12px;
+          left: 12px;
+          right: 12px;
+          width: auto;
+        }
       }
     </style>
   </head>
@@ -58,18 +127,27 @@
     <div id="app">
       <div id="map"></div>
       <div class="controls">
+        <div class="title">Transit Throughput</div>
         <div class="row">
           <label for="view-select">View</label>
           <select id="view-select">
-            <option value="corridor">Corridor</option>
-            <option value="physical">Physical</option>
+            <option value="corridor">Corridor Capacity</option>
+            <option value="physical">Physical Segments</option>
           </select>
         </div>
         <div class="row">
-          <label><input id="agency-muni" type="checkbox" checked /> Muni</label>
+          <label><input id="agency-muni" type="checkbox" checked /> Muni (SFMTA)</label>
           <label><input id="agency-bart" type="checkbox" checked /> BART</label>
         </div>
-        <div class="legend">Line width reflects daily passenger-traversals.</div>
+        <div class="row" id="corridor-bart-row">
+          <label>
+            <input id="corridor-include-bart" type="checkbox" />
+            Include BART in corridor view
+          </label>
+        </div>
+        <div class="legend-title">Daily passenger-traversals</div>
+        <div class="legend-lines" id="legend-lines"></div>
+        <div class="legend-note">Line width uses deterministic log scaling.</div>
       </div>
     </div>
     <script type="module" src="./main.ts"></script>

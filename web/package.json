@@ -4,9 +4,10 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview"
+    "sync-data": "node ./scripts/sync-processed-data.mjs",
+    "dev": "npm run sync-data && vite",
+    "build": "npm run sync-data && vite build",
+    "preview": "npm run sync-data && vite preview"
   },
   "dependencies": {
     "maplibre-gl": "^4.7.1"

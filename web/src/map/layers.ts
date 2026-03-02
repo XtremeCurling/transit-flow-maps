@@ -1,22 +1,23 @@
 import type maplibregl from "maplibre-gl";
 
-import { WIDTH_STOPS } from "./style";
+import { LAYER_COLORS, WIDTH_EXPRESSION } from "./style";
 
-type ViewName = "corridor" | "physical";
+export type ViewName = "corridor" | "physical";
 
-type AgencyFilter = {
+export type FlowFilterState = {
   muniEnabled: boolean;
   bartEnabled: boolean;
+  includeBartInCorridor: boolean;
 };
 
 const SOURCES = {
   corridor: {
     id: "corridor-source",
-    data: "../data/processed/web/corridor.geojson"
+    data: `${import.meta.env.BASE_URL}data/processed/web/corridor.geojson`
   },
   physical: {
     id: "physical-source",
-    data: "../data/processed/web/physical.geojson"
+    data: `${import.meta.env.BASE_URL}data/processed/web/physical.geojson`
   }
 } as const;
 
@@ -47,9 +48,9 @@ export function ensureFlowLayers(map: maplibregl.Map): void {
           visibility: viewName === "corridor" ? "visible" : "none"
         },
         paint: {
-          "line-color": viewName === "corridor" ? "#eb4d4b" : "#1262a3",
-          "line-width": ["interpolate", ["linear"], ["coalesce", ["get", "daily_riders"], 0], ...WIDTH_STOPS],
-          "line-opacity": 0.85
+          "line-color": LAYER_COLORS[viewName],
+          "line-width": WIDTH_EXPRESSION,
+          "line-opacity": 0.86
         }
       });
     }
@@ -64,23 +65,46 @@ export function setViewVisibility(map: maplibregl.Map, view: ViewName): void {
   });
 }
 
-export function setAgencyFilter(map: maplibregl.Map, filter: AgencyFilter): void {
-  const allowed: string[] = [];
+function agencyMatchExpr(agencyCode: "SFMTA" | "BART"): unknown[] {
+  return [
+    "any",
+    ["==", ["upcase", ["to-string", ["coalesce", ["get", "agency"], ""]]], agencyCode],
+    ["in", agencyCode, ["coalesce", ["get", "agencies"], ["literal", []]]]
+  ];
+}
+
+function layerFilterExpr(layer: ViewName, filter: FlowFilterState): unknown[] {
+  const allowedTerms: unknown[] = [];
   if (filter.muniEnabled) {
-    allowed.push("SFMTA", "Muni", "muni", "sfmta");
+    allowedTerms.push(agencyMatchExpr("SFMTA"));
   }
   if (filter.bartEnabled) {
-    allowed.push("BART", "bart");
+    allowedTerms.push(agencyMatchExpr("BART"));
   }
 
-  const expression: unknown[] =
-    allowed.length === 0
-      ? ["==", ["get", "agency"], "__none__"]
-      : ["in", ["downcase", ["to-string", ["get", "agency"]]], ["literal", allowed.map((x) => x.toLowerCase())]];
+  if (allowedTerms.length === 0) {
+    return ["==", 1, 0];
+  }
 
-  (Object.values(LAYERS) as string[]).forEach((layerId) => {
+  const clauses: unknown[] = [["any", ...allowedTerms]];
+  if (layer === "corridor" && !filter.includeBartInCorridor) {
+    clauses.push(["!", agencyMatchExpr("BART")]);
+  }
+
+  if (clauses.length === 1) {
+    return clauses[0] as unknown[];
+  }
+  return ["all", ...clauses];
+}
+
+export function applyFlowFilters(map: maplibregl.Map, filter: FlowFilterState): void {
+  (Object.keys(LAYERS) as ViewName[]).forEach((viewName) => {
+    const layerId = LAYERS[viewName];
     if (map.getLayer(layerId)) {
-      map.setFilter(layerId, expression as maplibregl.FilterSpecification);
+      map.setFilter(
+        layerId,
+        layerFilterExpr(viewName, filter) as maplibregl.FilterSpecification
+      );
     }
   });
 }

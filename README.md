@@ -30,7 +30,7 @@ python -m transit_flow_maps.cli --help
 ```
 
 ## Current status
-Milestone 5 is implemented for `tfm build-segments`, `tfm build-flows-muni`, `tfm build-flows-bart`, `tfm build-corridors`, and `tfm export-geojson`.
+Milestone 6 is implemented for pipeline + web map (`tfm build-segments`, `tfm build-flows-muni`, `tfm build-flows-bart`, `tfm build-corridors`, `tfm export-geojson`, plus MapLibre layer toggles/hover for corridor and physical views).
 
 ## Data policy
 Raw data is local-only and ignored from Git. See `data/README.md` for details.
