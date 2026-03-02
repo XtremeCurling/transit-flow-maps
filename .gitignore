@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+pipeline/.venv/
+
+# Node
+node_modules/
+web/node_modules/
+
+# OS
+.DS_Store
+
+# Raw and external transit data (keep local only)
+data/raw/**
+!data/raw/.gitkeep
+data/**/gtfs/*.zip
+data/gtfs/*.zip
+
+# Generated pipeline artifacts
+data/processed/interim/**
+!data/processed/interim/.gitkeep
+data/processed/debug/**
+!data/processed/debug/.gitkeep
+data/processed/web/**
+!data/processed/web/.gitkeep
+
+# Local config overrides
+pipeline/src/transit_flow_maps/config/local.yaml
+
+# Build outputs
+web/dist/

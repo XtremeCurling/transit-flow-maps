@@ -1,0 +1,30 @@
+# Deterministic defaults for v1.x
+h3_resolution: 11
+edge_pos_bins: 6
+bearing_bucket_count: 12
+
+densify_spacing_m: 20
+
+snap_target_m: 35
+snap_warn_m: 40
+snap_hard_cap_m: 75
+
+canonical_stop_dedupe_m: 10
+degenerate_span_epsilon_m: 3
+
+non_neighbor_max_path_cells: 20
+non_neighbor_max_recursion_depth: 4
+
+corridor_buffer_m: 50
+corridor_assignment_max_distance_m: 60
+corridor_sample_spacing_m: 20
+
+crs_metric_default: EPSG:26910
+
+paths:
+  data_root: data
+  interim_dir: data/processed/interim
+  debug_dir: data/processed/debug
+  web_dir: data/processed/web
+  sfmta_gtfs_zip: data/raw/gtfs/sfmta.zip
+  bart_gtfs_zip: data/raw/gtfs/bart.zip

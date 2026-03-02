@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Transit Flow Maps</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f4f5f0;
+        --ink: #10131a;
+        --panel: rgba(255, 255, 255, 0.94);
+        --border: rgba(16, 19, 26, 0.2);
+      }
+
+      html,
+      body,
+      #app {
+        margin: 0;
+        height: 100%;
+        width: 100%;
+        background: radial-gradient(circle at 15% 20%, #fff7df, var(--bg));
+      }
+
+      #map {
+        position: absolute;
+        inset: 0;
+      }
+
+      .controls {
+        position: absolute;
+        top: 16px;
+        left: 16px;
+        z-index: 10;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 10px;
+        font-family: "Avenir Next", Avenir, "Segoe UI", sans-serif;
+        font-size: 13px;
+        display: grid;
+        gap: 8px;
+      }
+
+      .row {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+
+      .legend {
+        font-size: 12px;
+        line-height: 1.3;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <div id="map"></div>
+      <div class="controls">
+        <div class="row">
+          <label for="view-select">View</label>
+          <select id="view-select">
+            <option value="corridor">Corridor</option>
+            <option value="physical">Physical</option>
+          </select>
+        </div>
+        <div class="row">
+          <label><input id="agency-muni" type="checkbox" checked /> Muni</label>
+          <label><input id="agency-bart" type="checkbox" checked /> BART</label>
+        </div>
+        <div class="legend">Line width reflects daily passenger-traversals.</div>
+      </div>
+    </div>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

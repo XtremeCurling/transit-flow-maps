@@ -1,0 +1,68 @@
+[build-system]
+requires = ["hatchling>=1.24.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "transit-flow-maps"
+version = "0.1.0"
+description = "Deterministic transit throughput mapping pipeline"
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+  "pandas>=2.2,<3.0",
+  "pyarrow>=16,<20",
+  "numpy>=1.26,<3.0",
+  "shapely==2.0.*",
+  "pyproj>=3.6,<4.0",
+  "h3==4.1.*",
+  "networkx>=3.2,<4.0",
+  "typer>=0.12,<1.0",
+  "pydantic>=2.7,<3.0",
+  "PyYAML>=6.0,<7.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.2,<9.0",
+  "ruff>=0.5,<1.0",
+  "mypy>=1.10,<2.0",
+]
+
+[project.scripts]
+tfm = "transit_flow_maps.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/transit_flow_maps"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+mypy_path = ["src"]
+
+[[tool.mypy.overrides]]
+module = [
+  "h3",
+  "pandas",
+  "networkx",
+  "networkx.*",
+  "shapely",
+  "shapely.*",
+  "pyproj",
+  "pyproj.*",
+  "yaml",
+  "typer",
+]
+ignore_missing_imports = true

@@ -1,0 +1,7 @@
+# Copy to local.yaml for machine-specific overrides (do not commit local.yaml)
+paths:
+  sfmta_gtfs_zip: /absolute/path/to/sfmta.zip
+  bart_gtfs_zip: /absolute/path/to/bart.zip
+  muni_weekday_loads_csv: /absolute/path/to/20231108_SF_Muni_Weekday_Stops_&_Loads.csv
+  bart_ridership_xlsx: /absolute/path/to/Ridership_202308.xlsx
+  bart_station_names_xls: /absolute/path/to/station-names.xls
