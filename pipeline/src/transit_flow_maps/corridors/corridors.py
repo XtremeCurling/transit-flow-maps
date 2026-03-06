@@ -29,6 +29,8 @@ class CorridorSegment:
     corridor_segment_id: str
     corridor_index: int
     h3_segment_id: str
+    cell_lo: str
+    cell_hi: str
     geom_wkb: bytes
     bearing_undirected_deg: float
     metric_line: LineString
@@ -163,6 +165,8 @@ def build_corridor_plans(runtime_config: RuntimeConfig) -> dict[str, CorridorPla
                     corridor_segment_id=corridor_segment_id,
                     corridor_index=seg_idx,
                     h3_segment_id=str(record["segment_id"]),
+                    cell_lo=str(record["cell_lo"]),
+                    cell_hi=str(record["cell_hi"]),
                     geom_wkb=geom_wkb,
                     bearing_undirected_deg=_undirected_bearing_for_metric_line(metric_line),
                     metric_line=metric_line,

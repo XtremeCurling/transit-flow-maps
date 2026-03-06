@@ -1,6 +1,6 @@
-import type maplibregl from "maplibre-gl";
+import maplibregl, { type MapGeoJSONFeature } from "maplibre-gl";
 
-import { LAYERS } from "./layers";
+import { HOVER_QUERY_LAYER_PRIORITY } from "./layers";
 
 function parseMaybeArray(value: unknown): string[] {
   if (Array.isArray(value)) {
@@ -59,32 +59,60 @@ function formatTimeBasis(value: unknown): string {
   return text === "" ? "n/a" : text;
 }
 
+function pickFeatureByPriority(
+  features: MapGeoJSONFeature[]
+): MapGeoJSONFeature | null {
+  if (features.length === 0) {
+    return null;
+  }
+
+  const byLayerId = new Map<string, MapGeoJSONFeature>();
+  for (const feature of features) {
+    const layerId = feature.layer?.id;
+    if (!layerId || byLayerId.has(layerId)) {
+      continue;
+    }
+    byLayerId.set(layerId, feature);
+  }
+
+  for (const layerId of HOVER_QUERY_LAYER_PRIORITY) {
+    const feature = byLayerId.get(layerId);
+    if (feature) {
+      return feature;
+    }
+  }
+  return features[0] ?? null;
+}
+
 export function bindHoverPopup(map: maplibregl.Map): void {
   const popup = new maplibregl.Popup({ closeButton: false, closeOnClick: false });
 
-  (Object.values(LAYERS) as string[]).forEach((layerId) => {
-    map.on("mousemove", layerId, (event) => {
-      const feature = event.features?.[0];
-      if (!feature) {
-        return;
-      }
-
-      const props = (feature.properties as Record<string, unknown>) ?? {};
-      const html = [
-        `<strong>Daily riders:</strong> ${formatRiders(props.daily_riders)}`,
-        `<strong>Agencies:</strong> ${formatList(props.agencies)}`,
-        `<strong>Routes:</strong> ${formatList(props.routes)}`,
-        `<strong>Modes:</strong> ${formatList(props.modes)}`,
-        `<strong>Time basis:</strong> ${formatTimeBasis(props.time_basis)}`
-      ].join("<br />");
-
-      popup.setLngLat(event.lngLat).setHTML(html).addTo(map);
-      map.getCanvas().style.cursor = "pointer";
-    });
-
-    map.on("mouseleave", layerId, () => {
+  map.on("mousemove", (event) => {
+    const features = map.queryRenderedFeatures(event.point, {
+      layers: HOVER_QUERY_LAYER_PRIORITY
+    }) as MapGeoJSONFeature[];
+    const feature = pickFeatureByPriority(features);
+    if (!feature) {
       popup.remove();
       map.getCanvas().style.cursor = "";
-    });
+      return;
+    }
+
+    const props = (feature.properties as Record<string, unknown>) ?? {};
+    const html = [
+      `<strong>Daily riders:</strong> ${formatRiders(props.daily_riders)}`,
+      `<strong>Agencies:</strong> ${formatList(props.agencies)}`,
+      `<strong>Routes:</strong> ${formatList(props.routes)}`,
+      `<strong>Modes:</strong> ${formatList(props.modes)}`,
+      `<strong>Time basis:</strong> ${formatTimeBasis(props.time_basis)}`
+    ].join("<br />");
+
+    popup.setLngLat(event.lngLat).setHTML(html).addTo(map);
+    map.getCanvas().style.cursor = "pointer";
+  });
+
+  map.on("mouseout", () => {
+    popup.remove();
+    map.getCanvas().style.cursor = "";
   });
 }

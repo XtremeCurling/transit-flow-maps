@@ -19,6 +19,9 @@ corridor_buffer_m: 50
 corridor_assignment_max_distance_m: 60
 corridor_sample_spacing_m: 20
 
+muni_scale_by_trip_count: false
+validate_max_unmatched_flow_pct: 5.0
+
 crs_metric_default: EPSG:26910
 
 paths:

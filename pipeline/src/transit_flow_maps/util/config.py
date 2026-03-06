@@ -53,6 +53,9 @@ class Settings(BaseModel):
     corridor_assignment_max_distance_m: float = 60
     corridor_sample_spacing_m: float = 20
 
+    muni_scale_by_trip_count: bool = False
+    validate_max_unmatched_flow_pct: float = 5.0
+
     crs_metric_default: str = "EPSG:26910"
 
     paths: PathsConfig = Field(default_factory=PathsConfig)

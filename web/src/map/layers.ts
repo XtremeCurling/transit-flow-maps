@@ -10,57 +10,99 @@ export type FlowFilterState = {
   includeBartInCorridor: boolean;
 };
 
-const SOURCES = {
-  corridor: {
-    id: "corridor-source",
-    data: `${import.meta.env.BASE_URL}data/processed/web/corridor.geojson`
-  },
-  physical: {
-    id: "physical-source",
-    data: `${import.meta.env.BASE_URL}data/processed/web/physical.geojson`
-  }
-} as const;
+type LayerId = "corridor-all" | "corridor-flows" | "physical-all" | "physical-flows";
 
-const LAYERS = {
-  corridor: "corridor-layer",
-  physical: "physical-layer"
-} as const;
+type LayerMeta = {
+  sourceId: string;
+  data: string;
+  view: ViewName;
+  kind: "all" | "flows";
+};
+
+const LAYER_META: Record<LayerId, LayerMeta> = {
+  "corridor-all": {
+    sourceId: "corridor-all-source",
+    data: `${import.meta.env.BASE_URL}data/processed/web/corridor_all.geojson`,
+    view: "corridor",
+    kind: "all"
+  },
+  "corridor-flows": {
+    sourceId: "corridor-flows-source",
+    data: `${import.meta.env.BASE_URL}data/processed/web/corridor_flows.geojson`,
+    view: "corridor",
+    kind: "flows"
+  },
+  "physical-all": {
+    sourceId: "physical-all-source",
+    data: `${import.meta.env.BASE_URL}data/processed/web/physical_all.geojson`,
+    view: "physical",
+    kind: "all"
+  },
+  "physical-flows": {
+    sourceId: "physical-flows-source",
+    data: `${import.meta.env.BASE_URL}data/processed/web/physical_flows.geojson`,
+    view: "physical",
+    kind: "flows"
+  }
+};
+
+const ADD_ORDER: LayerId[] = ["corridor-all", "corridor-flows", "physical-all", "physical-flows"];
+const FLOW_LAYER_IDS: LayerId[] = ["corridor-flows", "physical-flows"];
+
+export const HOVER_QUERY_LAYER_PRIORITY: string[] = [
+  "corridor-flows",
+  "physical-flows",
+  "corridor-all",
+  "physical-all"
+];
+
+const ALL_LAYER_COLOR = "#6c7f8d";
+const ALL_LAYER_WIDTH = 1.2;
 
 export function ensureFlowLayers(map: maplibregl.Map): void {
-  (Object.keys(SOURCES) as ViewName[]).forEach((viewName) => {
-    const sourceDef = SOURCES[viewName];
+  ADD_ORDER.forEach((layerId) => {
+    const meta = LAYER_META[layerId];
 
-    if (!map.getSource(sourceDef.id)) {
-      map.addSource(sourceDef.id, {
+    if (!map.getSource(meta.sourceId)) {
+      map.addSource(meta.sourceId, {
         type: "geojson",
-        data: sourceDef.data
+        data: meta.data
       });
     }
 
-    if (!map.getLayer(LAYERS[viewName])) {
+    if (!map.getLayer(layerId)) {
       map.addLayer({
-        id: LAYERS[viewName],
+        id: layerId,
         type: "line",
-        source: sourceDef.id,
+        source: meta.sourceId,
         layout: {
           "line-cap": "round",
           "line-join": "round",
-          visibility: viewName === "corridor" ? "visible" : "none"
+          visibility: meta.view === "corridor" ? "visible" : "none"
         },
-        paint: {
-          "line-color": LAYER_COLORS[viewName],
-          "line-width": WIDTH_EXPRESSION,
-          "line-opacity": 0.86
-        }
+        paint:
+          meta.kind === "all"
+            ? {
+                "line-color": ALL_LAYER_COLOR,
+                "line-width": ALL_LAYER_WIDTH,
+                "line-opacity": 0.22
+              }
+            : {
+                "line-color": LAYER_COLORS[meta.view],
+                "line-width":
+                  WIDTH_EXPRESSION as maplibregl.DataDrivenPropertyValueSpecification<number>,
+                "line-opacity": 0.86
+              }
       });
     }
   });
 }
 
 export function setViewVisibility(map: maplibregl.Map, view: ViewName): void {
-  (Object.keys(LAYERS) as ViewName[]).forEach((name) => {
-    if (map.getLayer(LAYERS[name])) {
-      map.setLayoutProperty(LAYERS[name], "visibility", name === view ? "visible" : "none");
+  ADD_ORDER.forEach((layerId) => {
+    if (map.getLayer(layerId)) {
+      const visibility = LAYER_META[layerId].view === view ? "visible" : "none";
+      map.setLayoutProperty(layerId, "visibility", visibility);
     }
   });
 }
@@ -73,7 +115,7 @@ function agencyMatchExpr(agencyCode: "SFMTA" | "BART"): unknown[] {
   ];
 }
 
-function layerFilterExpr(layer: ViewName, filter: FlowFilterState): unknown[] {
+function layerFilterExpr(layerId: LayerId, filter: FlowFilterState): unknown[] {
   const allowedTerms: unknown[] = [];
   if (filter.muniEnabled) {
     allowedTerms.push(agencyMatchExpr("SFMTA"));
@@ -87,7 +129,7 @@ function layerFilterExpr(layer: ViewName, filter: FlowFilterState): unknown[] {
   }
 
   const clauses: unknown[] = [["any", ...allowedTerms]];
-  if (layer === "corridor" && !filter.includeBartInCorridor) {
+  if (layerId === "corridor-flows" && !filter.includeBartInCorridor) {
     clauses.push(["!", agencyMatchExpr("BART")]);
   }
 
@@ -98,15 +140,9 @@ function layerFilterExpr(layer: ViewName, filter: FlowFilterState): unknown[] {
 }
 
 export function applyFlowFilters(map: maplibregl.Map, filter: FlowFilterState): void {
-  (Object.keys(LAYERS) as ViewName[]).forEach((viewName) => {
-    const layerId = LAYERS[viewName];
+  FLOW_LAYER_IDS.forEach((layerId) => {
     if (map.getLayer(layerId)) {
-      map.setFilter(
-        layerId,
-        layerFilterExpr(viewName, filter) as maplibregl.FilterSpecification
-      );
+      map.setFilter(layerId, layerFilterExpr(layerId, filter) as maplibregl.FilterSpecification);
     }
   });
 }
-
-export { LAYERS };

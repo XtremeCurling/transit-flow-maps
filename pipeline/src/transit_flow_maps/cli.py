@@ -14,6 +14,7 @@ from transit_flow_maps.flows.muni_stop_loads import build_muni_flows
 from transit_flow_maps.gtfs.shapes import build_segments as build_segments_job
 from transit_flow_maps.util.config import load_runtime_config
 from transit_flow_maps.util.logging import configure_logging, get_logger
+from transit_flow_maps.validate.reports import run_validation
 
 app = typer.Typer(help="Transit Flow Maps CLI")
 
@@ -115,6 +116,7 @@ def build_flows_muni(
     typer.echo(f"degenerate spans: {artifacts.degenerate_spans_path}")
     typer.echo(f"excluded route-directions: {artifacts.excluded_route_directions_path}")
     typer.echo(f"sanity totals: {artifacts.sanity_totals_path}")
+    typer.echo(f"input semantics: {artifacts.input_semantics_path}")
     typer.echo(f"rows written: {artifacts.rows_written}")
 
 
@@ -177,6 +179,20 @@ def export_geojson(
     )
     artifacts = export_geojson_job(runtime_config, view=normalized_view)
     typer.echo(f"geojson: {artifacts.output_path}")
+    for path in artifacts.additional_output_paths:
+        typer.echo(f"additional geojson: {path}")
+    if artifacts.join_coverage_path is not None:
+        typer.echo(f"join coverage: {artifacts.join_coverage_path}")
+    if artifacts.join_coverage_stats is not None:
+        stats = artifacts.join_coverage_stats
+        typer.echo(
+            "join summary: "
+            f"|keys|={stats.key_count} "
+            f"|flows|={stats.flow_count} "
+            f"|intersection|={stats.intersection_count} "
+            f"flow_match_rate={stats.flow_match_rate:.4f} "
+            f"key_match_rate={stats.key_match_rate:.4f}"
+        )
     typer.echo(f"rows written: {artifacts.rows_written}")
 
 
@@ -186,8 +202,20 @@ def validate(
 ) -> None:
     """Run validation reports and quality gates."""
     logger = get_logger(__name__)
-    logger.info("validate scaffold invoked with config=%s", config)
-    typer.echo("validate scaffold is ready; implementation follows in Milestone 7.")
+    runtime_config = load_runtime_config(config)
+    logger.info("Running validate with config=%s", config.resolve())
+    artifacts = run_validation(runtime_config)
+
+    typer.echo(f"summary: {artifacts.summary_path}")
+    typer.echo(f"top segments: {artifacts.top_segments_path}")
+    typer.echo(f"route throughput: {artifacts.route_throughput_path}")
+    typer.echo(
+        f"flow_only_pct: {artifacts.flow_only_pct:.3f} "
+        f"(max {artifacts.max_unmatched_flow_pct:.3f})"
+    )
+    typer.echo(f"status: {'PASS' if artifacts.passed else 'FAIL'}")
+    if not artifacts.passed:
+        raise typer.Exit(code=1)
 
 
 if __name__ == "__main__":

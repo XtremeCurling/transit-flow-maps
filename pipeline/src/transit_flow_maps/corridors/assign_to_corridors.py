@@ -8,15 +8,8 @@ from pathlib import Path
 from typing import SupportsFloat, cast
 
 import pandas as pd
-from shapely import wkb
-from shapely.geometry import LineString
 
-from transit_flow_maps.conflation.densify import bearing_degrees_xy, fold_undirected_bearing
-from transit_flow_maps.corridors.corridors import (
-    CorridorPlan,
-    CorridorSegment,
-    build_corridor_plans,
-)
+from transit_flow_maps.corridors.corridors import CorridorPlan, CorridorSegment, build_corridor_plans
 from transit_flow_maps.util.config import RuntimeConfig, ensure_output_directories
 from transit_flow_maps.util.logging import get_logger
 
@@ -44,13 +37,11 @@ class CorridorAggregateState:
 
 @dataclass(frozen=True)
 class SegmentAssignment:
-    """Best corridor assignment for one physical segment id."""
+    """Resolved corridor assignment for one physical segment id."""
 
     corridor_id: str
     corridor_segment_id: str
     corridor_index: int
-    distance_m: float
-    bearing_delta_deg: float
 
 
 def _parse_json_list(value: object) -> list[str]:
@@ -78,83 +69,108 @@ def _safe_float(value: object) -> float:
     return parsed
 
 
-def _bearing_for_metric_line(line: LineString) -> float:
-    coords = list(line.coords)
-    if len(coords) < 2:
-        return 0.0
-    start = (float(coords[0][0]), float(coords[0][1]))
-    end = (float(coords[-1][0]), float(coords[-1][1]))
-    bearing = bearing_degrees_xy(start, end)
-    if bearing is None:
-        return 0.0
-    return float(fold_undirected_bearing(bearing))
+def _undirected_cell_pair(cell_a: str, cell_b: str) -> tuple[str, str]:
+    if cell_a <= cell_b:
+        return cell_a, cell_b
+    return cell_b, cell_a
 
 
-def _bearing_delta_deg(a: float, b: float) -> float:
-    delta = abs(a - b) % 180.0
-    return min(delta, 180.0 - delta)
-
-
-def _metric_line_for_plan(geom_wkb: bytes, plan: CorridorPlan) -> LineString | None:
-    geom = wkb.loads(geom_wkb)
-    if not isinstance(geom, LineString):
-        return None
-    metric_coords = [
-        tuple(float(v) for v in plan.crs_context.to_metric.transform(float(x), float(y)))
-        for x, y in geom.coords
-    ]
-    if len(metric_coords) < 2:
-        return None
-    return LineString(metric_coords)
-
-
-def _load_segment_geom_lookup(segment_keys_path: Path) -> dict[str, bytes]:
-    columns = ["segment_id", "geom_wkb", "agency", "route_id", "shape_id"]
+def _load_segment_pair_lookup(segment_keys_path: Path) -> dict[str, tuple[str, str]]:
+    columns = ["segment_id", "cell_lo", "cell_hi", "agency", "route_id", "shape_id"]
     segment_keys = pd.read_parquet(segment_keys_path, columns=columns)
     if segment_keys.empty:
         return {}
 
-    ordered = segment_keys.sort_values(["segment_id", "agency", "route_id", "shape_id"])
-    grouped = ordered.groupby("segment_id", as_index=False).agg(geom_wkb=("geom_wkb", "first"))
+    ordered = segment_keys.sort_values(
+        ["segment_id", "cell_lo", "cell_hi", "agency", "route_id", "shape_id"]
+    )
+    grouped = (
+        ordered.groupby("segment_id", as_index=False)
+        .agg(cell_lo=("cell_lo", "first"), cell_hi=("cell_hi", "first"))
+        .sort_values("segment_id")
+    )
     return {
-        str(row["segment_id"]): bytes(row["geom_wkb"])
+        str(row["segment_id"]): _undirected_cell_pair(str(row["cell_lo"]), str(row["cell_hi"]))
         for _, row in grouped.iterrows()
     }
 
 
-def _select_best_segment_for_plan(
-    line_metric: LineString,
-    bearing_undirected: float,
-    plan: CorridorPlan,
-    *,
-    max_distance_m: float,
-) -> SegmentAssignment | None:
-    best_key: tuple[float, float, int] | None = None
-    best_segment: CorridorSegment | None = None
-    for corridor_segment in plan.segments:
-        distance = float(line_metric.distance(corridor_segment.metric_line))
-        if distance > max_distance_m:
+def _build_corridor_pair_index(
+    plans: dict[str, CorridorPlan],
+) -> dict[tuple[str, str], list[CorridorSegment]]:
+    pair_index: dict[tuple[str, str], list[CorridorSegment]] = {}
+    for corridor_id in sorted(plans):
+        plan = plans[corridor_id]
+        for corridor_segment in plan.segments:
+            pair = _undirected_cell_pair(corridor_segment.cell_lo, corridor_segment.cell_hi)
+            pair_index.setdefault(pair, []).append(corridor_segment)
+
+    for pair in pair_index:
+        pair_index[pair] = sorted(
+            pair_index[pair],
+            key=lambda segment: (segment.corridor_id, segment.corridor_index),
+        )
+    return pair_index
+
+
+def _assign_segment_ids_by_membership(
+    segment_ids: list[str],
+    segment_pair_lookup: dict[str, tuple[str, str]],
+    corridor_pair_index: dict[tuple[str, str], list[CorridorSegment]],
+) -> tuple[dict[str, SegmentAssignment], list[dict[str, object]]]:
+    assignments: dict[str, SegmentAssignment] = {}
+    assignment_rows: list[dict[str, object]] = []
+
+    for segment_id in segment_ids:
+        pair = segment_pair_lookup.get(segment_id)
+        if pair is None:
+            assignment_rows.append(
+                {
+                    "segment_id": segment_id,
+                    "cell_lo": "",
+                    "cell_hi": "",
+                    "corridor_id": "",
+                    "corridor_segment_id": "",
+                    "reason": "missing_segment_pair",
+                    "candidate_count": 0,
+                }
+            )
             continue
 
-        bearing_delta = _bearing_delta_deg(
-            bearing_undirected,
-            corridor_segment.bearing_undirected_deg,
+        candidates = corridor_pair_index.get(pair, [])
+        if not candidates:
+            assignment_rows.append(
+                {
+                    "segment_id": segment_id,
+                    "cell_lo": pair[0],
+                    "cell_hi": pair[1],
+                    "corridor_id": "",
+                    "corridor_segment_id": "",
+                    "reason": "unmatched_pair",
+                    "candidate_count": 0,
+                }
+            )
+            continue
+
+        best = candidates[0]
+        assignments[segment_id] = SegmentAssignment(
+            corridor_id=best.corridor_id,
+            corridor_segment_id=best.corridor_segment_id,
+            corridor_index=best.corridor_index,
         )
-        candidate_key = (distance, bearing_delta, corridor_segment.corridor_index)
-        if best_key is None or candidate_key < best_key:
-            best_key = candidate_key
-            best_segment = corridor_segment
+        assignment_rows.append(
+            {
+                "segment_id": segment_id,
+                "cell_lo": pair[0],
+                "cell_hi": pair[1],
+                "corridor_id": best.corridor_id,
+                "corridor_segment_id": best.corridor_segment_id,
+                "reason": "exact_pair",
+                "candidate_count": len(candidates),
+            }
+        )
 
-    if best_key is None or best_segment is None:
-        return None
-
-    return SegmentAssignment(
-        corridor_id=plan.corridor_id,
-        corridor_segment_id=best_segment.corridor_segment_id,
-        corridor_index=best_segment.corridor_index,
-        distance_m=best_key[0],
-        bearing_delta_deg=best_key[1],
-    )
+    return assignments, assignment_rows
 
 
 def build_corridors(runtime_config: RuntimeConfig, *, include_bart: bool) -> CorridorArtifacts:
@@ -185,70 +201,32 @@ def build_corridors(runtime_config: RuntimeConfig, *, include_bart: bool) -> Cor
     if flows.empty:
         raise RuntimeError("No segment flow rows after agency filtering")
 
-    geom_lookup = _load_segment_geom_lookup(segment_keys_path)
-    if not geom_lookup:
-        raise RuntimeError("No segment geometry could be loaded from segment_keys.parquet")
+    segment_pair_lookup = _load_segment_pair_lookup(segment_keys_path)
+    if not segment_pair_lookup:
+        raise RuntimeError("No segment cell-pair lookup could be loaded from segment_keys.parquet")
+
+    corridor_pair_index = _build_corridor_pair_index(plans)
+    if not corridor_pair_index:
+        raise RuntimeError("No corridor cell-pair index available")
 
     unique_segment_ids = sorted(set(flows["segment_id"].astype(str)))
-    assignments: dict[str, SegmentAssignment] = {}
-    assignment_rows: list[dict[str, object]] = []
-    corridor_buffer_m = float(runtime_config.settings.corridor_buffer_m)
-    assignment_max_m = float(runtime_config.settings.corridor_assignment_max_distance_m)
-
-    for segment_id in unique_segment_ids:
-        geom_wkb = geom_lookup.get(segment_id)
-        if geom_wkb is None:
-            continue
-
-        best_overall_key: tuple[float, float, str, int] | None = None
-        best_assignment: SegmentAssignment | None = None
-
-        for corridor_id in sorted(plans):
-            plan = plans[corridor_id]
-            metric_line = _metric_line_for_plan(geom_wkb, plan)
-            if metric_line is None:
-                continue
-
-            centerline_distance = float(metric_line.distance(plan.centerline_metric))
-            if centerline_distance > corridor_buffer_m:
-                continue
-
-            bearing_undirected = _bearing_for_metric_line(metric_line)
-            plan_assignment = _select_best_segment_for_plan(
-                metric_line,
-                bearing_undirected,
-                plan,
-                max_distance_m=assignment_max_m,
-            )
-            if plan_assignment is None:
-                continue
-
-            candidate_key = (
-                plan_assignment.distance_m,
-                plan_assignment.bearing_delta_deg,
-                plan_assignment.corridor_id,
-                plan_assignment.corridor_index,
-            )
-            if best_overall_key is None or candidate_key < best_overall_key:
-                best_overall_key = candidate_key
-                best_assignment = plan_assignment
-
-        if best_assignment is None:
-            continue
-
-        assignments[segment_id] = best_assignment
-        assignment_rows.append(
-            {
-                "segment_id": segment_id,
-                "corridor_id": best_assignment.corridor_id,
-                "corridor_segment_id": best_assignment.corridor_segment_id,
-                "distance_m": round(best_assignment.distance_m, 3),
-                "bearing_delta_deg": round(best_assignment.bearing_delta_deg, 3),
-            }
-        )
+    assignments, assignment_rows = _assign_segment_ids_by_membership(
+        unique_segment_ids,
+        segment_pair_lookup,
+        corridor_pair_index,
+    )
 
     if not assignments:
         raise RuntimeError("No physical segments were assigned to any corridor segment")
+
+    exact_count = sum(1 for row in assignment_rows if row["reason"] == "exact_pair")
+    unmatched_count = len(assignment_rows) - exact_count
+    logger.info(
+        "Corridor pair assignment exact=%s unmatched=%s total=%s",
+        exact_count,
+        unmatched_count,
+        len(assignment_rows),
+    )
 
     segment_index: dict[str, CorridorSegment] = {}
     segment_states: dict[str, CorridorAggregateState] = {}
@@ -358,13 +336,17 @@ def build_corridors(runtime_config: RuntimeConfig, *, include_bart: bool) -> Cor
         assignment_df = pd.DataFrame(
             columns=[
                 "segment_id",
+                "cell_lo",
+                "cell_hi",
                 "corridor_id",
                 "corridor_segment_id",
-                "distance_m",
-                "bearing_delta_deg",
+                "reason",
+                "candidate_count",
             ]
         )
-    assignment_df = assignment_df.sort_values(["corridor_id", "corridor_segment_id", "segment_id"])
+    assignment_df = assignment_df.sort_values(
+        ["reason", "corridor_id", "corridor_segment_id", "segment_id"]
+    )
     assignment_df.to_csv(assignment_debug_path, index=False)
 
     logger.info("Corridor flow rows written: %s", len(corridor_df))

@@ -16,11 +16,25 @@ from transit_flow_maps.util.logging import get_logger
 
 
 @dataclass(frozen=True)
+class JoinCoverageStats:
+    """Join coverage stats between segment keys and segment flows."""
+
+    key_count: int
+    flow_count: int
+    intersection_count: int
+    flow_match_rate: float
+    key_match_rate: float
+
+
+@dataclass(frozen=True)
 class ExportGeoJSONArtifacts:
     """Output path metadata for export-geojson."""
 
     output_path: Path
     rows_written: int
+    additional_output_paths: tuple[Path, ...] = ()
+    join_coverage_path: Path | None = None
+    join_coverage_stats: JoinCoverageStats | None = None
 
 
 @dataclass
@@ -33,6 +47,16 @@ class PhysicalAggregateState:
     routes: set[str] = field(default_factory=set)
     time_bases: set[str] = field(default_factory=set)
     source_breakdown: dict[tuple[str, str], dict[str, object]] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class SegmentKeySummary:
+    """Aggregated segment-key metadata used by exports."""
+
+    geom_wkb: bytes
+    agencies: list[str]
+    modes: list[str]
+    routes: list[str]
 
 
 def _parse_json_list(value: object) -> list[str]:
@@ -66,16 +90,30 @@ def _line_coordinates_from_wkb(geom_wkb: bytes) -> list[list[float]]:
     return [[float(x), float(y)] for x, y in geom.coords]
 
 
-def _segment_geom_lookup(segment_keys_path: Path) -> dict[str, bytes]:
-    columns = ["segment_id", "geom_wkb", "agency", "route_id", "shape_id"]
+def _segment_key_summary(segment_keys_path: Path) -> dict[str, SegmentKeySummary]:
+    columns = ["segment_id", "geom_wkb", "agency", "mode", "route_id", "shape_id"]
     segment_keys = pd.read_parquet(segment_keys_path, columns=columns)
     if segment_keys.empty:
         return {}
 
     ordered = segment_keys.sort_values(["segment_id", "agency", "route_id", "shape_id"])
-    grouped = ordered.groupby("segment_id", as_index=False).agg(geom_wkb=("geom_wkb", "first"))
+    grouped = (
+        ordered.groupby("segment_id", as_index=False)
+        .agg(
+            geom_wkb=("geom_wkb", "first"),
+            agencies=("agency", lambda s: sorted(set(str(v) for v in s))),
+            modes=("mode", lambda s: sorted(set(str(v) for v in s))),
+            routes=("route_id", lambda s: sorted(set(str(v) for v in s))),
+        )
+        .sort_values("segment_id")
+    )
     return {
-        str(row["segment_id"]): bytes(row["geom_wkb"])
+        str(row["segment_id"]): SegmentKeySummary(
+            geom_wkb=bytes(row["geom_wkb"]),
+            agencies=list(row["agencies"]),
+            modes=list(row["modes"]),
+            routes=list(row["routes"]),
+        )
         for _, row in grouped.iterrows()
     }
 
@@ -93,6 +131,39 @@ def _write_geojson(features: list[dict[str, object]], output_path: Path) -> None
     output_path.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
 
 
+def _write_join_coverage(
+    *,
+    key_segment_ids: set[str],
+    flow_segment_ids: set[str],
+    output_path: Path,
+) -> JoinCoverageStats:
+    matched = key_segment_ids & flow_segment_ids
+    rows: list[dict[str, str]] = []
+    for segment_id in sorted(key_segment_ids | flow_segment_ids):
+        if segment_id in matched:
+            status = "matched"
+        elif segment_id in key_segment_ids:
+            status = "key_only"
+        else:
+            status = "flow_only"
+        rows.append({"segment_id": segment_id, "status": status})
+
+    pd.DataFrame(rows, columns=["segment_id", "status"]).to_csv(output_path, index=False)
+
+    key_count = len(key_segment_ids)
+    flow_count = len(flow_segment_ids)
+    intersection_count = len(matched)
+    flow_match_rate = (intersection_count / flow_count) if flow_count > 0 else 1.0
+    key_match_rate = (intersection_count / key_count) if key_count > 0 else 1.0
+    return JoinCoverageStats(
+        key_count=key_count,
+        flow_count=flow_count,
+        intersection_count=intersection_count,
+        flow_match_rate=flow_match_rate,
+        key_match_rate=key_match_rate,
+    )
+
+
 def _export_physical(runtime_config: RuntimeConfig) -> ExportGeoJSONArtifacts:
     logger = get_logger(__name__)
     segment_flows_path = runtime_config.paths.interim_dir / "segment_flows.parquet"
@@ -108,16 +179,30 @@ def _export_physical(runtime_config: RuntimeConfig) -> ExportGeoJSONArtifacts:
     if missing:
         raise ValueError(f"segment_flows.parquet missing required columns: {missing}")
 
-    geom_lookup = _segment_geom_lookup(segment_keys_path)
-    if not geom_lookup:
+    key_summary = _segment_key_summary(segment_keys_path)
+    if not key_summary:
         raise RuntimeError("No segment geometry available for physical export")
+
+    key_segment_ids = set(key_summary)
+    flow_segment_ids = set(flows["segment_id"].astype(str).tolist())
+    join_coverage_path = runtime_config.paths.debug_dir / "join_coverage.csv"
+    join_stats = _write_join_coverage(
+        key_segment_ids=key_segment_ids,
+        flow_segment_ids=flow_segment_ids,
+        output_path=join_coverage_path,
+    )
+    logger.info(
+        "Physical join coverage |keys|=%s |flows|=%s |intersection|=%s flow_match_rate=%.4f key_match_rate=%.4f",
+        join_stats.key_count,
+        join_stats.flow_count,
+        join_stats.intersection_count,
+        join_stats.flow_match_rate,
+        join_stats.key_match_rate,
+    )
 
     states: dict[str, PhysicalAggregateState] = {}
     for _, row in flows.iterrows():
         segment_id = str(row["segment_id"])
-        if segment_id not in geom_lookup:
-            continue
-
         state = states.setdefault(segment_id, PhysicalAggregateState())
         agency = str(row["agency"])
         mode = str(row["mode"])
@@ -144,17 +229,41 @@ def _export_physical(runtime_config: RuntimeConfig) -> ExportGeoJSONArtifacts:
         if isinstance(breakdown_time_bases, set):
             breakdown_time_bases.add(time_basis)
 
-    features: list[dict[str, object]] = []
-    for segment_id in sorted(states):
-        state = states[segment_id]
-        geom_wkb = geom_lookup.get(segment_id)
-        if geom_wkb is None:
-            continue
-
-        coordinates = _line_coordinates_from_wkb(geom_wkb)
+    physical_all_features: list[dict[str, object]] = []
+    for segment_id in sorted(key_summary):
+        summary = key_summary[segment_id]
+        coordinates = _line_coordinates_from_wkb(summary.geom_wkb)
         if len(coordinates) < 2:
             continue
 
+        physical_all_features.append(
+            {
+                "type": "Feature",
+                "geometry": {"type": "LineString", "coordinates": coordinates},
+                "properties": {
+                    "segment_id": segment_id,
+                    "daily_riders": 0,
+                    "time_basis": "",
+                    "routes": summary.routes,
+                    "agencies": summary.agencies,
+                    "modes": summary.modes,
+                    "has_flow": False,
+                    "source_breakdown": [],
+                },
+            }
+        )
+
+    physical_flow_features: list[dict[str, object]] = []
+    for segment_id in sorted(states):
+        summary = key_summary.get(segment_id)
+        if summary is None:
+            continue
+
+        coordinates = _line_coordinates_from_wkb(summary.geom_wkb)
+        if len(coordinates) < 2:
+            continue
+
+        state = states[segment_id]
         breakdown_rows: list[dict[str, object]] = []
         for agency, mode in sorted(state.source_breakdown):
             breakdown = state.source_breakdown[(agency, mode)]
@@ -174,7 +283,7 @@ def _export_physical(runtime_config: RuntimeConfig) -> ExportGeoJSONArtifacts:
                 }
             )
 
-        features.append(
+        physical_flow_features.append(
             {
                 "type": "Feature",
                 "geometry": {"type": "LineString", "coordinates": coordinates},
@@ -185,15 +294,32 @@ def _export_physical(runtime_config: RuntimeConfig) -> ExportGeoJSONArtifacts:
                     "routes": sorted(state.routes),
                     "agencies": sorted(state.agencies),
                     "modes": sorted(state.modes),
+                    "has_flow": True,
                     "source_breakdown": breakdown_rows,
                 },
             }
         )
 
-    output_path = runtime_config.paths.web_dir / "physical.geojson"
-    _write_geojson(features, output_path)
-    logger.info("Exported physical GeoJSON features: %s", len(features))
-    return ExportGeoJSONArtifacts(output_path=output_path, rows_written=len(features))
+    physical_all_path = runtime_config.paths.web_dir / "physical_all.geojson"
+    physical_flows_path = runtime_config.paths.web_dir / "physical_flows.geojson"
+    legacy_path = runtime_config.paths.web_dir / "physical.geojson"
+
+    _write_geojson(physical_all_features, physical_all_path)
+    _write_geojson(physical_flow_features, physical_flows_path)
+    _write_geojson(physical_flow_features, legacy_path)
+
+    logger.info(
+        "Exported physical GeoJSON all=%s flows=%s",
+        len(physical_all_features),
+        len(physical_flow_features),
+    )
+    return ExportGeoJSONArtifacts(
+        output_path=legacy_path,
+        rows_written=len(physical_flow_features),
+        additional_output_paths=(physical_all_path, physical_flows_path),
+        join_coverage_path=join_coverage_path,
+        join_coverage_stats=join_stats,
+    )
 
 
 def _export_corridor(runtime_config: RuntimeConfig) -> ExportGeoJSONArtifacts:
@@ -217,7 +343,9 @@ def _export_corridor(runtime_config: RuntimeConfig) -> ExportGeoJSONArtifacts:
         raise ValueError(f"corridor_flows.parquet missing required columns: {missing}")
 
     corridor_df = corridor_df.sort_values(["corridor_id", "corridor_segment_id"])
-    features: list[dict[str, object]] = []
+    corridor_all_features: list[dict[str, object]] = []
+    corridor_flow_features: list[dict[str, object]] = []
+
     for _, row in corridor_df.iterrows():
         coordinates = _line_coordinates_from_wkb(bytes(row["geom_wkb"]))
         if len(coordinates) < 2:
@@ -236,28 +364,47 @@ def _export_corridor(runtime_config: RuntimeConfig) -> ExportGeoJSONArtifacts:
             source_breakdown = []
 
         corridor_segment_id = str(row["corridor_segment_id"])
-        features.append(
-            {
-                "type": "Feature",
-                "geometry": {"type": "LineString", "coordinates": coordinates},
-                "properties": {
-                    "corridor_id": str(row["corridor_id"]),
-                    "corridor_segment_id": corridor_segment_id,
-                    "segment_id": corridor_segment_id,
-                    "daily_riders": round(_safe_float(row["daily_riders"]), 6),
-                    "time_basis": str(row["time_basis"]),
-                    "routes": routes,
-                    "agencies": agencies,
-                    "modes": modes,
-                    "source_breakdown": source_breakdown,
-                },
-            }
-        )
+        daily_riders = round(_safe_float(row["daily_riders"]), 6)
+        has_flow = daily_riders > 0.0
 
-    output_path = runtime_config.paths.web_dir / "corridor.geojson"
-    _write_geojson(features, output_path)
-    logger.info("Exported corridor GeoJSON features: %s", len(features))
-    return ExportGeoJSONArtifacts(output_path=output_path, rows_written=len(features))
+        feature = {
+            "type": "Feature",
+            "geometry": {"type": "LineString", "coordinates": coordinates},
+            "properties": {
+                "corridor_id": str(row["corridor_id"]),
+                "corridor_segment_id": corridor_segment_id,
+                "segment_id": corridor_segment_id,
+                "daily_riders": daily_riders,
+                "time_basis": str(row["time_basis"]),
+                "routes": routes,
+                "agencies": agencies,
+                "modes": modes,
+                "has_flow": has_flow,
+                "source_breakdown": source_breakdown,
+            },
+        }
+        corridor_all_features.append(feature)
+        if has_flow:
+            corridor_flow_features.append(feature)
+
+    corridor_all_path = runtime_config.paths.web_dir / "corridor_all.geojson"
+    corridor_flows_path = runtime_config.paths.web_dir / "corridor_flows.geojson"
+    legacy_path = runtime_config.paths.web_dir / "corridor.geojson"
+
+    _write_geojson(corridor_all_features, corridor_all_path)
+    _write_geojson(corridor_flow_features, corridor_flows_path)
+    _write_geojson(corridor_all_features, legacy_path)
+
+    logger.info(
+        "Exported corridor GeoJSON all=%s flows=%s",
+        len(corridor_all_features),
+        len(corridor_flow_features),
+    )
+    return ExportGeoJSONArtifacts(
+        output_path=legacy_path,
+        rows_written=len(corridor_all_features),
+        additional_output_paths=(corridor_all_path, corridor_flows_path),
+    )
 
 
 def export_geojson(runtime_config: RuntimeConfig, *, view: str) -> ExportGeoJSONArtifacts:

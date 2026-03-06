@@ -9,7 +9,14 @@ const repoRoot = path.resolve(__dirname, "..", "..");
 const sourceDir = path.join(repoRoot, "data", "processed", "web");
 const destDir = path.join(__dirname, "..", "public", "data", "processed", "web");
 
-const GEOJSON_FILES = ["corridor.geojson", "physical.geojson"];
+const GEOJSON_FILES = [
+  "corridor.geojson",
+  "corridor_all.geojson",
+  "corridor_flows.geojson",
+  "physical.geojson",
+  "physical_all.geojson",
+  "physical_flows.geojson"
+];
 const EMPTY_FEATURE_COLLECTION = '{"type":"FeatureCollection","features":[]}';
 
 async function exists(filePath) {

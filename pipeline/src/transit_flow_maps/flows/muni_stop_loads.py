@@ -40,6 +40,7 @@ class MuniFlowArtifacts:
     excluded_route_directions_path: Path
     sanity_totals_path: Path
     shape_cache_path: Path
+    input_semantics_path: Path
     rows_written: int
 
 
@@ -656,6 +657,24 @@ def build_muni_flows(runtime_config: RuntimeConfig, input_file: Path) -> MuniFlo
     ons_src = canonical_columns[ons_col] if ons_col else None
     offs_src = canonical_columns[offs_col] if offs_col else None
     dep_load_src = canonical_columns[dep_load_col] if dep_load_col else None
+    scale_by_trip_count = bool(runtime_config.settings.muni_scale_by_trip_count)
+
+    per_vehicle_columns = {"avg_veh_ons", "avg_veh_offs", "avg_all_dep_loads", "avg_veh_dep_load"}
+    selected_metric_columns = {col for col in [ons_col, offs_col, dep_load_col] if col is not None}
+    likely_per_vehicle = bool(selected_metric_columns & per_vehicle_columns)
+    if likely_per_vehicle and not scale_by_trip_count:
+        logger.warning(
+            "Muni load columns appear average-per-vehicle; scaling not applied. "
+            "Set muni_scale_by_trip_count=true to enable trip-count scaling."
+        )
+    logger.info(
+        "Muni input columns route=%s direction=%s stop_id=%s dep_load=%s scale_by_trip_count=%s",
+        route_col,
+        direction_col,
+        stop_id_col,
+        dep_load_col,
+        scale_by_trip_count,
+    )
 
     prepared_stops, stop_by_id, stop_code_to_id = _prepare_stops(stops)
 
@@ -1050,6 +1069,8 @@ def build_muni_flows(runtime_config: RuntimeConfig, input_file: Path) -> MuniFlo
             else:
                 span_throughput = _safe_float(current["dep_load"])
             span_throughput = max(0.0, span_throughput)
+            if scale_by_trip_count:
+                span_throughput *= float(route_shape_cache.trip_count)
 
             for segment_id in span_segment_ids:
                 segment_contrib[segment_id] += span_throughput
@@ -1134,6 +1155,29 @@ def build_muni_flows(runtime_config: RuntimeConfig, input_file: Path) -> MuniFlo
         )
     excluded_df.to_csv(excluded_route_directions_path, index=False)
 
+    input_semantics_path = runtime_config.paths.debug_dir / "muni_input_semantics.csv"
+    pd.DataFrame(
+        [
+            {
+                "route_column": route_src,
+                "direction_column": direction_src,
+                "stop_id_column": stop_id_src,
+                "stop_code_column": stop_code_src or "",
+                "stop_name_column": stop_name_src or "",
+                "stop_lat_column": lat_src or "",
+                "stop_lon_column": lon_src or "",
+                "ons_column": ons_src or "",
+                "offs_column": offs_src or "",
+                "dep_load_column": dep_load_src or "",
+                "likely_per_vehicle": bool(likely_per_vehicle),
+                "dep_load_metric_kind": (
+                    "avg_per_vehicle_likely" if likely_per_vehicle else "unknown_or_total"
+                ),
+                "muni_scale_by_trip_count": bool(scale_by_trip_count),
+            }
+        ]
+    ).to_csv(input_semantics_path, index=False)
+
     sanity_totals_path = runtime_config.paths.debug_dir / "sanity_totals.csv"
     top_segments = (
         muni_segment_df.sort_values("daily_riders", ascending=False)
@@ -1199,5 +1243,6 @@ def build_muni_flows(runtime_config: RuntimeConfig, input_file: Path) -> MuniFlo
         excluded_route_directions_path=excluded_route_directions_path,
         sanity_totals_path=sanity_totals_path,
         shape_cache_path=shape_cache_path,
+        input_semantics_path=input_semantics_path,
         rows_written=int(len(muni_segment_df)),
     )

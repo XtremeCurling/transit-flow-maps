@@ -22,4 +22,6 @@ def test_default_config_contains_locked_values() -> None:
     assert cfg["bearing_bucket_count"] == 12
     assert cfg["densify_spacing_m"] == 20
     assert cfg["snap_hard_cap_m"] == 75
+    assert cfg["muni_scale_by_trip_count"] is False
+    assert cfg["validate_max_unmatched_flow_pct"] == 5.0
     assert cfg["crs_metric_default"] == "EPSG:26910"
